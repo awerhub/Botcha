@@ -1,126 +1,99 @@
 import telebot
-import os
+import json
 import random
-import requests
-from datetime import datetime
-
-# ================== НАСТРОЙКИ ==================
+import os
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # например: -1001234567890
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 
 bot = telebot.TeleBot(TOKEN)
 
-GAMES = [
-    "evade",
-    "mm2",
-    "blox fruits",
-    "doors",
-    "arsenal"
-]
 
-# ================== ПОИСК СКРИПТА ==================
+def load_scripts():
+    with open("scripts.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def find_script(game: str) -> str | None:
-    query = f'{game} loadstring game:HttpGet'
-    url = "https://api.github.com/search/code"
+scripts = load_scripts()
 
-    params = {
-        "q": query,
-        "per_page": 5
-    }
-
-    headers = {
-        "Accept": "application/vnd.github.v3+json"
-    }
-
-    try:
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return None
-
-        data = r.json()
-
-        for item in data.get("items", []):
-            raw_url = item["html_url"]
-            raw_url = raw_url.replace(
-                "https://github.com/",
-                "https://raw.githubusercontent.com/"
-            ).replace("/blob/", "/")
-
-            check = requests.get(raw_url, timeout=10)
-            if check.status_code == 200 and "loadstring(game:HttpGet" in check.text:
-                return raw_url
-
-    except Exception:
-        return None
-
-    return None
-
-# ================== ОФОРМЛЕНИЕ ПОСТА ==================
-
-def build_post(game: str) -> str:
-    script_url = find_script(game)
-
-    if not script_url:
-        return f"❌ Не удалось найти рабочий скрипт для *{game}*"
-
-    return (
-        f"🎮 *{game.capitalize()}*\n\n"
-        "🔥 Найден рабочий скрипт\n\n"
-        "```lua\n"
-        f'loadstring(game:HttpGet("{script_url}"))()\n'
-        "```\n\n"
-        f"🕒 Обновлено: {datetime.now().strftime('%d.%m.%Y')}"
-    )
-
-# ================== КОМАНДЫ ==================
 
 @bot.message_handler(commands=["start"])
 def start(message):
     bot.send_message(
         message.chat.id,
-        "Приветствую! 👋\n"
-        "Я бот для оформления постов со скриптами.\n\n"
-        "Список команд:\n\n"
-        "/post <игра> — отправит уже оформленный пост (для проверки)\n"
-        "/random — отправит оформленный пост со случайной игрой\n"
-        "/postc <игра> — отправит пост сразу в канал"
+        "Приветствую! Список команд:\n\n"
+        "/post <игра> — отправит оформленный пост\n"
+        "/postc <игра> — отправит пост в канал\n"
+        "/random — случайный пост\n"
+        "/search <слово> — поиск скриптов"
     )
 
-@bot.message_handler(commands=["post"])
-def post_preview(message):
-    game = message.text.replace("/post", "").strip()
-    if not game:
-        bot.send_message(message.chat.id, "❌ Укажи игру")
+
+# 🔍 ПОИСК
+@bot.message_handler(commands=["search"])
+def search(message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message, "Напиши слово для поиска")
         return
 
-    post = build_post(game)
-    bot.send_message(message.chat.id, post, parse_mode="Markdown")
+    query = args[1].lower()
+    results = []
 
+    for game in scripts.keys():
+        if query in game.lower():
+            results.append(game)
+
+    if not results:
+        bot.reply_to(message, "Ничего не найдено ❌")
+        return
+
+    text = "🔍 Найдено:\n\n"
+    for g in results:
+        text += f"• {g}\n"
+
+    bot.send_message(message.chat.id, text)
+
+
+# 📄 ПОСТ
+@bot.message_handler(commands=["post"])
+def post(message):
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message, "Напиши название игры")
+        return
+
+    game = args[1].lower()
+
+    if game not in scripts:
+        bot.reply_to(message, "Игра не найдена. Используй /search")
+        return
+
+    bot.send_message(message.chat.id, scripts[game])
+
+
+# 📢 ПОСТ В КАНАЛ
 @bot.message_handler(commands=["postc"])
 def post_channel(message):
-    game = message.text.replace("/postc", "").strip()
-    if not game:
-        bot.send_message(message.chat.id, "❌ Укажи игру")
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        bot.reply_to(message, "Напиши название игры")
         return
 
-    post = build_post(game)
+    game = args[1].lower()
 
-    if post.startswith("❌"):
-        bot.send_message(message.chat.id, post, parse_mode="Markdown")
+    if game not in scripts:
+        bot.reply_to(message, "Игра не найдена")
         return
 
-    bot.send_message(CHANNEL_ID, post, parse_mode="Markdown")
-    bot.send_message(message.chat.id, "✅ Пост отправлен в канал")
+    bot.send_message(CHANNEL_ID, scripts[game])
+    bot.reply_to(message, "Отправлено в канал ✅")
 
+
+# 🎲 РАНДОМ
 @bot.message_handler(commands=["random"])
 def random_post(message):
-    game = random.choice(GAMES)
-    post = build_post(game)
-    bot.send_message(message.chat.id, post, parse_mode="Markdown")
+    game = random.choice(list(scripts.keys()))
+    bot.send_message(message.chat.id, scripts[game])
 
-# ================== ЗАПУСК ==================
 
-print("Bot started")
 bot.infinity_polling()
